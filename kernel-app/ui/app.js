@@ -367,28 +367,30 @@ async function renderShield(p){
 
 /* -------- ДРАЙВЕРЫ -------- */
 async function renderDrivers(p){
+  if (STATE.drvScan===undefined) { scanDrivers(); return; } // при первом открытии сразу ищем обновления
   const d = await go('driverList') || [];
-  const scan = STATE.drvScan; // null — ещё не искали, 'busy' — идёт поиск, {ok,list,msg} — результат
+  const scan = STATE.drvScan; // 'busy' — идёт поиск, {ok,list,nvidia,msg} — результат
+  const nv = scan && scan.nvidia;
   const ageTxt = m => m<0 ? '' : m<1 ? 'свежий' : m<12 ? m+' мес. назад' : Math.floor(m/12)+' г. '+(m%12?m%12+' мес. ':'')+'назад';
   const devRow = x => {
-    const old = x.age>=6 && (x.cls==='display'||x.cls==='system');
-    const vend = x.vendor ? `<button class="btn ghost sm" onclick="go('openUrl','${x.vendor}')">${I.ext} Сайт производителя</button>` : '';
+    let st = '';
+    if (nv && x.cls==='display' && /nvidia|geforce|rtx|gtx|quadro/i.test(x.name))
+      st = nv.update ? `<div class="st upd">доступна ${nv.latest}</div>` : `<div class="st ok">актуально</div>`;
     return `
     <div class="drv-row">
       <div class="di">${x.cls==='display'?I.gpu:I.chip}</div>
       <div style="min-width:0"><div class="dn">${x.name}</div>
         <div class="dv">версия <b>${x.cur}</b>${x.date?' · от '+x.date+' ('+ageTxt(x.age)+')':''}${x.provider?' · '+x.provider:''}</div></div>
-      <div style="margin-left:auto;display:flex;align-items:center;gap:10px;flex-shrink:0">
-        ${old?'<div class="st upd">стоит обновить</div>':''}${vend}
-      </div>
+      ${st}
     </div>`;
   };
-  let wu = '';
-  if (scan==='busy') wu = `<div class="loader"><div class="sp"></div>Ищу обновления в Windows Update… обычно до минуты</div>`;
-  else if (scan && !scan.ok) wu = `<div class="warn">${I.warn}<div>${scan.msg||'Поиск не удался.'}</div></div>`;
-  else if (scan && !scan.list.length) wu = `<div class="drv-row"><div class="di">${I.check}</div><div><div class="dn">Все драйверы из Windows Update уже установлены</div><div class="dv">Новых версий в каталоге Microsoft нет.</div></div></div>`;
-  else if (scan) wu = `
-    <div class="uwp-grid" style="grid-template-columns:1fr">${scan.list.map(u=>`
+  const list = scan && scan.list || [];
+  let found = '';
+  if (scan==='busy') found = `<div class="loader"><div class="sp"></div>Проверяю Windows Update и сервер NVIDIA… обычно до минуты</div>`;
+  else if (scan && !scan.ok) found = `<div class="warn">${I.warn}<div>${scan.msg||'Поиск не удался.'}</div></div>`;
+  else if (scan && !list.length) found = `<div class="drv-row"><div class="di">${I.check}</div><div><div class="dn">Все драйверы актуальны</div><div class="dv">Новых версий нет ни в Windows Update${nv?', ни у NVIDIA':''}.</div></div></div>`;
+  else if (scan) found = `
+    <div class="uwp-grid" style="grid-template-columns:1fr">${list.map(u=>`
       <div class="uwp-item sel" data-drv="${u.id}" onclick="this.classList.toggle('sel');updDrvCount()">
         <div class="chk"></div>
         <div style="min-width:0"><div class="nm">${u.title}</div>
@@ -397,17 +399,18 @@ async function renderDrivers(p){
     </div>`;
   p.innerHTML = `
   <div class="page-head"><h1>Драйверы</h1>
-    <p>Ищем новые версии в официальном каталоге Windows Update — только драйверы, подписанные Microsoft. Видеокарта и чипсет там обычно отстают на месяцы, поэтому для них показываем возраст драйвера и ссылку на сайт производителя.</p></div>
+    <p>KERNEL сам находит и ставит новые драйверы: для всех устройств — из Windows Update (только подписанные Microsoft), для видеокарты NVIDIA — последнюю Game Ready версию напрямую с серверов NVIDIA. Перед установкой проверяется цифровая подпись, настройки драйвера сохраняются.</p></div>
   <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:18px">
-    <button class="btn gold" onclick="scanDrivers()" ${scan==='busy'?'disabled':''}>${I.chip} Найти обновления</button>
-    ${scan&&scan.ok&&scan.list.length?`<button class="btn ghost" id="drvInstall" onclick="doUpdateDrivers()">${I.dl} Установить выбранные (${scan.list.length})</button>`:''}
+    ${list.length?`<button class="btn gold" id="drvInstall" onclick="doUpdateDrivers()">${I.dl} Обновить всё (${list.length})</button>`:''}
+    <button class="btn ${list.length?'ghost':'gold'}" onclick="scanDrivers()" ${scan==='busy'?'disabled':''}>${I.chip} Проверить ещё раз</button>
     <button class="btn dark" onclick="doBackupDrivers()">Резервная копия</button>
   </div>
-  ${scan?`<div class="section-label">Доступно в Windows Update</div>${wu}`:''}
+  <div class="section-label">Найденные обновления</div>${found}
   <div class="section-label">Ваши устройства</div>
   ${d.length?d.map(devRow).join(''):'<div class="drv-row"><div class="dn">Устройства не найдены</div></div>'}`;
 }
-function updDrvCount(){ const b=document.getElementById('drvInstall'); if(b) b.innerHTML=I.dl+' Установить выбранные ('+document.querySelectorAll('[data-drv].sel').length+')'; }
+function updDrvCount(){ const n=document.querySelectorAll('[data-drv].sel').length, b=document.getElementById('drvInstall');
+  if(b){ b.innerHTML=I.dl+' Обновить выбранное ('+n+')'; b.disabled=!n; } }
 
 /* -------- ЖУРНАЛ -------- */
 async function renderLog(p){
@@ -492,7 +495,7 @@ async function scanDrivers(){
 }
 async function doUpdateDrivers(){ const ids=[...document.querySelectorAll('[data-drv].sel')].map(e=>e.dataset.drv);
   if(!ids.length) return;
-  await act('Устанавливаю драйверы…','Выбрано: '+ids.length+'. Скачиваю из Windows Update и ставлю — может занять несколько минут.', ()=>go('updateDrivers',ids).then(r=>{ STATE.drvScan=null; return r; })); }
+  await act('Обновляю драйверы…','Выбрано: '+ids.length+'. Скачиваю и ставлю'+(ids.some(i=>i.startsWith('nvidia:'))?' (драйвер NVIDIA весит около 1 ГБ)':'')+' — может занять 5–15 минут. Экран может мигнуть.', ()=>go('updateDrivers',ids).then(r=>{ STATE.drvScan=undefined; return r; })); }
 async function doBackupDrivers(){ await act('Сохраняю драйверы…','', async()=>{ await go('backupDrivers'); return {ok:true,msg:'Копия драйверов сохранена в %LOCALAPPDATA%\\KERNEL\\DriverBackup'}; }); }
 function doToggleAutoClean(){ go('toggleAutoClean'); }
 async function doLaunch(id){ const r=await go('launchApp',id); if(r&&r.ok===false){ openOverlay('',''); showResult(r);} }

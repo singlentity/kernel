@@ -62,12 +62,13 @@ const MOCK = {
   pinInfo:()=>({blocked:true,msg:'Windows 11 хранит закреплённые приложения в закрытом файле start2.bin и не даёт менять их скриптом. Проще закрепить вручную: правый клик по приложению → «Закрепить на начальном экране».'}),
   defenderStatus:()=>({realtime:true, tamper:true}),
   driverList:()=>[
-    {name:'NVIDIA GeForce RTX 5070',cur:'32.0.16.2101',date:'2026-10-19',age:0,provider:'NVIDIA',cls:'display',vendor:'https://www.nvidia.com/ru-ru/software/nvidia-app/'},
-    {name:'AMD SMBUS',cur:'2.0.0.29',date:'2025-08-07',age:14,provider:'Advanced Micro Devices, Inc',cls:'system',vendor:'https://www.amd.com/ru/support/download/drivers.html'},
-    {name:'Realtek Gaming 2.5GbE Family Controller',cur:'1125.31.50.603',date:'2026-03-06',age:7,provider:'Realtek',cls:'net',vendor:''},
-    {name:'Realtek High Definition Audio',cur:'6.0.9982.1',date:'2026-04-27',age:6,provider:'Realtek Semiconductor Corp.',cls:'media',vendor:''},
+    {name:'NVIDIA GeForce RTX 5070',cur:'32.0.16.2101',date:'2026-10-19',age:0,provider:'NVIDIA',cls:'display'},
+    {name:'AMD SMBUS',cur:'2.0.0.29',date:'2025-08-07',age:14,provider:'Advanced Micro Devices, Inc',cls:'system'},
+    {name:'Realtek Gaming 2.5GbE Family Controller',cur:'1125.31.50.603',date:'2026-03-06',age:7,provider:'Realtek',cls:'net'},
+    {name:'Realtek High Definition Audio',cur:'6.0.9982.1',date:'2026-04-27',age:6,provider:'Realtek Semiconductor Corp.',cls:'media'},
   ],
-  driverScan:()=>new Promise(r=>setTimeout(()=>r({ok:true,list:[
+  driverScan:()=>new Promise(r=>setTimeout(()=>r({ok:true,nvidia:{gpu:'NVIDIA GeForce RTX 5070',installed:'621.01',latest:'622.15',update:true},list:[
+    {id:'nvidia:622.15',title:'NVIDIA Game Ready 622.15 — NVIDIA GeForce RTX 5070',provider:'NVIDIA · 1.04 GB · с серверов NVIDIA',date:'2026-11-02'},
     {id:'a1',title:'Realtek - Net - 10.72.0.0',provider:'Realtek',date:'2026-09-12'},
     {id:'b2',title:'Realtek Semiconductor Corp. - MEDIA - 6.0.9990.1',provider:'Realtek Semiconductor Corp.',date:'2026-08-30'},
   ]}),1500)),

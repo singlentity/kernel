@@ -851,29 +851,21 @@ Get-CimInstance Win32_PnPSignedDriver | Where-Object {
 		}
 		res = append(res, map[string]interface{}{
 			"name": d.DeviceName, "cur": d.DriverVersion, "provider": d.DriverProviderName,
-			"cls": strings.ToLower(d.DeviceClass), "date": d.Date, "age": age, "vendor": vendorDriverURL(d.DeviceName, d.DeviceClass),
+			"cls": strings.ToLower(d.DeviceClass), "date": d.Date, "age": age,
 		})
 	}
 	return res
 }
 
-// Официальные страницы драйверов: для видеокарт и чипсетов Windows Update обычно отстаёт на месяцы
-func vendorDriverURL(name, cls string) string {
-	n := strings.ToLower(name)
-	gpu := strings.EqualFold(cls, "DISPLAY")
-	switch {
-	case gpu && (strings.Contains(n, "nvidia") || strings.Contains(n, "geforce")):
-		return "https://www.nvidia.com/ru-ru/software/nvidia-app/"
-	case (gpu || strings.EqualFold(cls, "SYSTEM")) && (strings.Contains(n, "amd") || strings.Contains(n, "radeon")):
-		return "https://www.amd.com/ru/support/download/drivers.html"
-	case (gpu || strings.EqualFold(cls, "SYSTEM")) && strings.Contains(n, "intel"):
-		return "https://www.intel.com/content/www/us/en/support/detect.html"
-	}
-	return ""
-}
-
-// Поиск обновлений драйверов в Windows Update (только поиск, ничего не ставит). Занимает 10–60 секунд.
+// Поиск обновлений драйверов: Windows Update + драйвер NVIDIA с серверов NVIDIA (только поиск). Занимает 10–60 секунд.
 func apiDriverScan() map[string]interface{} {
+	type nvRes struct {
+		d   *nvDriver
+		err error
+	}
+	nvCh := make(chan nvRes, 1)
+	go func() { d, err := nvCheck(); nvCh <- nvRes{d, err} }()
+
 	out, _ := ps(`
 $ErrorActionPreference='Stop'
 try{
@@ -890,15 +882,36 @@ try{
 		Msg  string                   `json:"msg"`
 		List []map[string]interface{} `json:"list"`
 	}
-	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &r); err != nil || !r.Ok {
+	wuOk := json.Unmarshal([]byte(strings.TrimSpace(out)), &r) == nil && r.Ok
+	if !wuOk {
 		logLine("ERR", "Поиск драйверов в Windows Update не удался: "+r.Msg)
-		return map[string]interface{}{"ok": false, "msg": "Windows Update не ответил. Проверьте интернет и что служба «Центр обновления Windows» не отключена."}
+	} else {
+		logLine("INFO", fmt.Sprintf("Windows Update: найдено обновлений драйверов — %d", len(r.List)))
 	}
-	if r.List == nil {
-		r.List = []map[string]interface{}{}
+	list := r.List
+	if list == nil {
+		list = []map[string]interface{}{}
 	}
-	logLine("INFO", fmt.Sprintf("Windows Update: найдено обновлений драйверов — %d", len(r.List)))
-	return map[string]interface{}{"ok": true, "list": r.List}
+
+	res := map[string]interface{}{"ok": wuOk, "list": list}
+	if nv := <-nvCh; nv.err != nil {
+		logLine("WARN", "NVIDIA: не удалось проверить драйвер — "+nv.err.Error())
+	} else if nv.d != nil {
+		upd := nvNewer(nv.d.Latest, nv.d.Installed)
+		res["nvidia"] = map[string]interface{}{"gpu": nv.d.GPU, "installed": nv.d.Installed, "latest": nv.d.Latest, "update": upd}
+		logLine("INFO", "NVIDIA: установлен "+orDash(nv.d.Installed)+", последний "+nv.d.Latest)
+		if upd {
+			res["list"] = append([]map[string]interface{}{{
+				"id": "nvidia:" + nv.d.Latest, "title": "NVIDIA Game Ready " + nv.d.Latest + " — " + nv.d.GPU,
+				"provider": "NVIDIA · " + nv.d.Size + " · с серверов NVIDIA", "date": nv.d.Date,
+			}}, list...)
+		}
+		res["ok"] = true
+	}
+	if res["ok"] == false {
+		res["msg"] = "Windows Update не ответил. Проверьте интернет и что служба «Центр обновления Windows» не отключена."
+	}
+	return res
 }
 
 // Установка выбранных обновлений драйверов (по UpdateID из apiDriverScan)
@@ -906,6 +919,35 @@ func apiUpdateDrivers(ids []string) map[string]interface{} {
 	if len(ids) == 0 {
 		return map[string]interface{}{"ok": false, "msg": "Не выбрано ни одного драйвера"}
 	}
+	msgs, okAny, reboot := []string{}, false, false
+	wuIDs := []string{}
+	for _, id := range ids {
+		if !strings.HasPrefix(id, "nvidia:") {
+			wuIDs = append(wuIDs, id)
+			continue
+		}
+		d, err := nvCheck()
+		if err == nil && d != nil {
+			err = nvInstall(d)
+		}
+		if err != nil {
+			logLine("ERR", "NVIDIA: "+err.Error())
+			msgs = append(msgs, "Драйвер NVIDIA не установлен: "+err.Error()+".")
+		} else {
+			okAny, reboot = true, true
+			msgs = append(msgs, "Драйвер NVIDIA "+d.Latest+" установлен.")
+		}
+	}
+	if len(wuIDs) > 0 {
+		r := wuInstallDrivers(wuIDs)
+		msgs = append(msgs, r["msg"].(string))
+		okAny = okAny || r["ok"].(bool)
+		reboot = reboot || r["reboot"].(bool)
+	}
+	return map[string]interface{}{"ok": okAny, "msg": strings.Join(msgs, " "), "reboot": reboot}
+}
+
+func wuInstallDrivers(ids []string) map[string]interface{} {
 	quoted := make([]string, 0, len(ids))
 	for _, id := range ids {
 		quoted = append(quoted, "'"+strings.ReplaceAll(id, "'", "")+"'")
@@ -934,10 +976,10 @@ try{
 	json.Unmarshal([]byte(strings.TrimSpace(out)), &r)
 	if r.Total == 0 {
 		logLine("ERR", "Драйверы не установлены: "+orDash(r.Msg))
-		return map[string]interface{}{"ok": false, "msg": "Не удалось установить драйверы. Подробности — в Журнале."}
+		return map[string]interface{}{"ok": false, "msg": "Драйверы из Windows Update не установлены. Подробности — в Журнале.", "reboot": false}
 	}
 	logLine("OK", fmt.Sprintf("Установлено драйверов: %d из %d", r.Done, r.Total))
-	msg := fmt.Sprintf("Установлено драйверов: %d из %d.", r.Done, r.Total)
+	msg := fmt.Sprintf("Из Windows Update установлено драйверов: %d из %d.", r.Done, r.Total)
 	return map[string]interface{}{"ok": r.Ok, "msg": msg, "reboot": r.Reboot}
 }
 func apiBackupDrivers() bool {
