@@ -10,6 +10,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unsafe"
 )
 
 /* ============ Журнал ============ */
@@ -112,6 +113,7 @@ $caption=$os.Caption -replace 'Microsoft ','' -replace 'Майкрософт ','
 }
 // Оценка «состояния»: сколько рекомендуемых твиков ещё НЕ применено
 func computeScore() int {
+	ensureTweaks()
 	applied := 0
 	for _, t := range tweakDefs {
 		if t.Recommended && t.isApplied() {
@@ -152,41 +154,141 @@ func dwordIs(root, path, name string, val int) bool {
 	return ok && int(v) == val
 }
 
-var tweakDefs []Tweak
+/* ---- Схема питания ---- */
+// Своя копия «Максимальной производительности» с фиксированным GUID: powercfg -duplicatescheme
+// без второго аргумента каждый раз создаёт новую копию со случайным GUID, а сам шаблон
+// e9a42b02 обычно нельзя сделать активным — поэтому раньше твик плодил копии и не включался.
+const (
+	ultimateTemplate = "e9a42b02-d5df-448d-aa00-03f14749eb61"
+	kernelScheme     = "4b3e1c6a-7e1d-4a6f-9c2b-6b5e4b2a9f01"
+	balancedScheme   = "381b4222-f694-41f0-9685-ff5bb260df2e"
+)
+
+func powerApply() {
+	if !regKeyExists("HKLM", powerSchemesPath+`\`+kernelScheme) {
+		run("powercfg.exe", "-duplicatescheme", ultimateTemplate, kernelScheme)
+	}
+	run("powercfg.exe", "-setactive", kernelScheme)
+	cleanupUltimateCopies()
+}
+
+const powerSchemesPath = `SYSTEM\CurrentControlSet\Control\Power\User\PowerSchemes`
+
+func activePowerScheme() string {
+	s, _ := regReadString("HKLM", powerSchemesPath, "ActivePowerScheme")
+	return strings.ToLower(s)
+}
+
+// Удаляем лишние копии «Максимальной производительности», которые наплодили старые версии KERNEL.
+// Ищем по реестру: имя копии хранится как ссылка на строку powrprof.dll,-19 — не зависит от языка Windows.
+func cleanupUltimateCopies() {
+	active := activePowerScheme()
+	removed := 0
+	for _, g := range regSubKeys("HKLM", powerSchemesPath) {
+		g = strings.ToLower(g)
+		if g == kernelScheme || g == active || g == ultimateTemplate { // шаблон не трогаем — из него создаётся схема
+			continue
+		}
+		if name, _ := regReadString("HKLM", powerSchemesPath+`\`+g, "FriendlyName"); strings.Contains(name, "powrprof.dll,-19,") {
+			if _, err := run("powercfg.exe", "/delete", g); err == nil {
+				removed++
+			}
+		}
+	}
+	if removed > 0 {
+		logLine("OK", fmt.Sprintf("Удалено лишних копий схемы питания: %d", removed))
+	}
+}
+
+func powerRevert() {
+	run("powercfg.exe", "-setactive", balancedScheme)
+	run("powercfg.exe", "/delete", kernelScheme)
+}
+
+// Есть ли у ПК батарея (ноутбук) — там «Максимальная производительность» только греет и сажает заряд
+func hasBattery() bool {
+	var st struct {
+		ACLineStatus, BatteryFlag, BatteryLifePercent, SystemStatusFlag byte
+		BatteryLifeTime, BatteryFullLifeTime                            uint32
+	}
+	r, _, _ := syscall.NewLazyDLL("kernel32.dll").NewProc("GetSystemPowerStatus").Call(uintptr(unsafe.Pointer(&st)))
+	return r != 0 && st.BatteryFlag != 128 && st.BatteryFlag != 255
+}
+
+/* ---- Оптимизация оконных игр (flip model) ---- */
+const dxPrefsPath = `SOFTWARE\Microsoft\DirectX\UserGpuPreferences`
+
+// Меняем/добавляем одну настройку в строке DirectXUserGlobalSettings, не трогая остальные (VRR и т.п.)
+func dxGlobalSet(key, val string) {
+	cur, _ := regReadString("HKCU", dxPrefsPath, "DirectXUserGlobalSettings")
+	parts := []string{}
+	for _, p := range strings.Split(cur, ";") {
+		if p = strings.TrimSpace(p); p != "" && !strings.HasPrefix(p, key+"=") {
+			parts = append(parts, p)
+		}
+	}
+	if val != "" {
+		parts = append(parts, key+"="+val)
+	}
+	s := ""
+	for _, p := range parts {
+		s += p + ";"
+	}
+	reg("add", `HKCU\`+dxPrefsPath, "/v", "DirectXUserGlobalSettings", "/t", "REG_SZ", "/d", s, "/f")
+}
+func dxGlobalHas(kv string) bool {
+	cur, _ := regReadString("HKCU", dxPrefsPath, "DirectXUserGlobalSettings")
+	return strings.Contains(cur, kv)
+}
+
+var (
+	tweakDefs []Tweak
+	tweakOnce sync.Once
+)
+
+// Твики создаются один раз; вызывается из любого потока (прогрев на старте и вызовы из JS идут параллельно)
+func ensureTweaks() { tweakOnce.Do(initTweaks) }
 
 func initTweaks() {
 	tweakDefs = []Tweak{
 		{ID: "power", Group: "Производительность и FPS", Name: "Схема питания «Максимальная производительность»",
-			Desc: "Процессор перестаёт сбрасывать частоты в простое — стабильнее FPS. Остаётся после перезагрузки.",
+			Desc:        "Ядра процессора не «засыпают» и не сбрасывают частоту между кадрами — меньше микрозадержек и ровнее 1% low. Средний FPS на настольном ПК растёт мало (0–3%). На ноутбуке не рекомендуется: греет и быстро сажает батарею.",
+			Recommended: !hasBattery(),
+			apply:       powerApply,
+			revert:      powerRevert,
+			isApplied:   func() bool { return activePowerScheme() == kernelScheme },
+		},
+		{ID: "flipmodel", Group: "Производительность и FPS", Name: "Оптимизация игр в окне и без рамки",
+			Desc:        "Штатная функция Windows 11: старые DirectX 10/11 игры в оконном и «полноэкранном без рамки» режиме выводят кадры напрямую, как в полноэкранном. Ниже задержка ввода, работает G-Sync/FreeSync. Действует со следующего запуска игры.",
 			Recommended: true,
-			apply: func() {
-				run("powercfg.exe", "-duplicatescheme", "e9a42b02-d5df-448d-aa00-03f14749eb61")
-				run("powercfg.exe", "-setactive", "e9a42b02-d5df-448d-aa00-03f14749eb61")
-			},
-			revert:    func() { run("powercfg.exe", "-setactive", "381b4222-f694-41f0-9685-ff5bb260df2e") },
-			isApplied: func() bool { o, _ := run("powercfg.exe", "-getactivescheme"); return strings.Contains(o, "e9a42b02") },
+			apply:       func() { dxGlobalSet("SwapEffectUpgradeEnable", "1") },
+			revert:      func() { dxGlobalSet("SwapEffectUpgradeEnable", "") },
+			isApplied:   func() bool { return dxGlobalHas("SwapEffectUpgradeEnable=1") },
 		},
 		{ID: "gamedvr", Group: "Производительность и FPS", Name: "Отключить запись игр (Game DVR)",
-			Desc: "Фоновая запись Xbox отнимает 5–10% FPS даже когда вы не записываете. Отключаем навсегда.",
+			Desc:        "Выключает фоновую запись Xbox Game Bar. Если запись «последних 30 секунд» была включена, она постоянно кодирует видео и отнимает несколько процентов FPS. Если не была — прироста не будет, но и вреда нет.",
 			Recommended: true,
 			apply: func() {
 				regDword("HKCU", `System\GameConfigStore`, "GameDVR_Enabled", 0)
+				regDword("HKCU", `SOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR`, "AppCaptureEnabled", 0)
+				regDword("HKCU", `SOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR`, "HistoricalCaptureEnabled", 0)
 				regDword("HKLM", `SOFTWARE\Policies\Microsoft\Windows\GameDVR`, "AllowGameDVR", 0)
 			},
 			revert: func() {
 				regDword("HKCU", `System\GameConfigStore`, "GameDVR_Enabled", 1)
+				regDel("HKCU", `SOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR`, "AppCaptureEnabled")
 				regDel("HKLM", `SOFTWARE\Policies\Microsoft\Windows\GameDVR`, "AllowGameDVR")
 			},
 			isApplied: func() bool { return dwordIs("HKCU", `System\GameConfigStore`, "GameDVR_Enabled", 0) },
 		},
 		{ID: "hags", Group: "Производительность и FPS", Name: "Аппаратное ускорение планирования GPU (HAGS)",
-			Desc: "⚠ Спорная настройка: на одних видеокартах снижает задержку, на других вызывает фризы и просадку FPS. По умолчанию ВЫКЛ — включайте вручную и проверяйте в своей игре.", Recommended: false, Reboot: true,
+			Desc: "Видеокарта сама планирует свою очередь кадров. Обязательно для генерации кадров DLSS (RTX 40/50) — без HAGS она не включится. На старых видеокартах и драйверах иногда даёт фризы, поэтому по умолчанию не трогаем.", Recommended: false, Reboot: true,
 			apply:     func() { regDword("HKLM", `SYSTEM\CurrentControlSet\Control\GraphicsDrivers`, "HwSchMode", 2) },
 			revert:    func() { regDword("HKLM", `SYSTEM\CurrentControlSet\Control\GraphicsDrivers`, "HwSchMode", 1) },
 			isApplied: func() bool { return dwordIs("HKLM", `SYSTEM\CurrentControlSet\Control\GraphicsDrivers`, "HwSchMode", 2) },
 		},
 		{ID: "gamemode", Group: "Производительность и FPS", Name: "Игровой режим Windows",
-			Desc: "Включает штатный «Игровой режим» — Windows сама отдаёт приоритет активной игре. Безопасно и поддерживается Microsoft.", Recommended: true,
+			Desc: "Windows отдаёт приоритет активной игре и не ставит обновления во время игры. В Windows 10/11 он включён по умолчанию — твик просто гарантирует, что его никто не выключил.", Recommended: true,
 			apply: func() {
 				regDword("HKCU", `SOFTWARE\Microsoft\GameBar`, "AllowAutoGameMode", 1)
 				regDword("HKCU", `SOFTWARE\Microsoft\GameBar`, "AutoGameModeEnabled", 1)
@@ -207,13 +309,13 @@ func initTweaks() {
 			isApplied: func() bool { return dwordIs("HKCU", `SOFTWARE\Microsoft\GameBar`, "AutoGameModeEnabled", 1) },
 		},
 		{ID: "bgapps", Group: "Фоновые процессы", Name: "Запретить работу приложений в фоне",
-			Desc: "UWP-приложения перестают работать и тратить ресурсы, когда вы ими не пользуетесь.", Recommended: true,
+			Desc: "Встроенные приложения из Microsoft Store (Почта, Погода, Phone Link и др.) не висят в фоне, пока закрыты. Экономит немного памяти и процессов. Минус: от этих приложений перестанут приходить уведомления.", Recommended: true,
 			apply:     func() { regDword("HKCU", `SOFTWARE\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications`, "GlobalUserDisabled", 1) },
 			revert:    func() { regDword("HKCU", `SOFTWARE\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications`, "GlobalUserDisabled", 0) },
 			isApplied: func() bool { return dwordIs("HKCU", `SOFTWARE\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications`, "GlobalUserDisabled", 1) },
 		},
 		{ID: "telemetry", Group: "Фоновые процессы", Name: "Отключить телеметрию и сбор данных",
-			Desc: "Останавливает службу диагностики Windows, которая постоянно шлёт данные.", Recommended: true,
+			Desc: "Останавливает службу DiagTrack, которая собирает и отправляет диагностику в Microsoft. Минус один фоновый процесс и меньше периодической нагрузки на диск и сеть.", Recommended: true,
 			apply: func() {
 				run("sc.exe", "stop", "DiagTrack")
 				run("sc.exe", "config", "DiagTrack", "start=", "disabled")
@@ -227,7 +329,7 @@ func initTweaks() {
 			isApplied: func() bool { return serviceStart("DiagTrack") == 4 },
 		},
 		{ID: "sysmain", Group: "Фоновые процессы", Name: "Отключить SysMain (Superfetch)",
-			Desc: "На SSD эта служба бесполезна и только грузит диск. На HDD лучше оставить.",
+			Desc: "Служба заранее подгружает в память часто используемые программы. На SSD выигрыш от неё мал, но вместе с ней отключается и сжатие памяти — при нехватке ОЗУ (8–16 ГБ) станет хуже. Имеет смысл только при 32 ГБ и больше.",
 			apply: func() {
 				run("sc.exe", "stop", "SysMain")
 				run("sc.exe", "config", "SysMain", "start=", "disabled")
@@ -239,18 +341,23 @@ func initTweaks() {
 			isApplied: func() bool { return serviceStart("SysMain") == 4 },
 		},
 		{ID: "tips", Group: "Интерфейс", Name: "Убрать рекламу и «советы» Windows",
-			Desc: "Отключает предложения в меню Пуск, подсказки и рекламные уведомления.", Recommended: true,
+			Desc: "Отключает предложения в меню Пуск, подсказки, рекламные уведомления и тихую установку «рекомендованных» приложений.", Recommended: true,
 			apply: func() {
 				c := `SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager`
 				for _, v := range []string{"SubscribedContent-338388Enabled", "SubscribedContent-338389Enabled", "SystemPaneSuggestionsEnabled", "SilentInstalledAppsEnabled"} {
 					regDword("HKCU", c, v, 0)
 				}
 			},
-			revert:    func() { regDword("HKCU", `SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager`, "SystemPaneSuggestionsEnabled", 1) },
+			revert: func() {
+				c := `SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager`
+				for _, v := range []string{"SubscribedContent-338388Enabled", "SubscribedContent-338389Enabled", "SystemPaneSuggestionsEnabled", "SilentInstalledAppsEnabled"} {
+					regDword("HKCU", c, v, 1)
+				}
+			},
 			isApplied: func() bool { return dwordIs("HKCU", `SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager`, "SystemPaneSuggestionsEnabled", 0) },
 		},
 		{ID: "mouseaccel", Group: "Производительность и FPS", Name: "Отключить акселерацию мыши",
-			Desc: "Убирает «улучшение точности указателя». Прицел в играх становится предсказуемым — движение мыши 1:1.", Recommended: true,
+			Desc: "Убирает «улучшение точности указателя». На FPS не влияет, но прицел становится предсказуемым — движение мыши 1:1, проще набить мышечную память.", Recommended: true,
 			apply: func() {
 				m := `Control Panel\Mouse`
 				reg("add", `HKCU\`+m, "/v", "MouseSpeed", "/t", "REG_SZ", "/d", "0", "/f")
@@ -263,40 +370,43 @@ func initTweaks() {
 				reg("add", `HKCU\`+m, "/v", "MouseThreshold1", "/t", "REG_SZ", "/d", "6", "/f")
 				reg("add", `HKCU\`+m, "/v", "MouseThreshold2", "/t", "REG_SZ", "/d", "10", "/f")
 			},
-			isApplied: func() bool {
-				o, _ := run("reg.exe", "query", `HKCU\Control Panel\Mouse`, "/v", "MouseSpeed")
-				return strings.Contains(o, "    0")
-			},
+			isApplied: func() bool { v, _ := regReadString("HKCU", `Control Panel\Mouse`, "MouseSpeed"); return v == "0" },
 		},
 		{ID: "visualfx", Group: "Интерфейс", Name: "Режим «максимум производительности» для эффектов",
-			Desc: "Отключает анимации, тени и прозрачность окон. Система отзывается мгновенно — заметно на слабых ПК.",
+			Desc: "Отключает анимации, тени и прозрачность окон. Заметно только на слабых ПК со встроенной графикой — на FPS в играх не влияет. Вступает в силу после выхода из системы.",
 			apply: func() {
 				regDword("HKCU", `SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects`, "VisualFXSetting", 2)
 				reg("add", `HKCU\Control Panel\Desktop`, "/v", "UserPreferencesMask", "/t", "REG_BINARY", "/d", "9012038010000000", "/f")
 				regDword("HKCU", `SOFTWARE\Microsoft\Windows\DWM`, "EnableAeroPeek", 0)
 			},
-			revert:    func() { regDword("HKCU", `SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects`, "VisualFXSetting", 1) },
+			revert: func() {
+				// значения Windows 10/11 по умолчанию («на усмотрение Windows»)
+				regDword("HKCU", `SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects`, "VisualFXSetting", 0)
+				reg("add", `HKCU\Control Panel\Desktop`, "/v", "UserPreferencesMask", "/t", "REG_BINARY", "/d", "9E1E078012000000", "/f")
+				regDword("HKCU", `SOFTWARE\Microsoft\Windows\DWM`, "EnableAeroPeek", 1)
+			},
 			isApplied: func() bool { return dwordIs("HKCU", `SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects`, "VisualFXSetting", 2) },
 		},
 		{ID: "fastmenu", Group: "Интерфейс", Name: "Ускорить отклик меню и окон",
-			Desc: "Убирает задержку появления меню и анимацию сворачивания. Рабочий стол начинает «летать».",
+			Desc: "Убирает задержку 0,4 с перед появлением подменю и анимацию сворачивания окон. Рабочий стол ощущается отзывчивее. Вступает в силу после выхода из системы.",
 			apply: func() {
 				reg("add", `HKCU\Control Panel\Desktop`, "/v", "MenuShowDelay", "/t", "REG_SZ", "/d", "0", "/f")
 				reg("add", `HKCU\Control Panel\Desktop\WindowMetrics`, "/v", "MinAnimate", "/t", "REG_SZ", "/d", "0", "/f")
 			},
-			revert:    func() { reg("add", `HKCU\Control Panel\Desktop`, "/v", "MenuShowDelay", "/t", "REG_SZ", "/d", "400", "/f") },
-			isApplied: func() bool { o, _ := run("reg.exe", "query", `HKCU\Control Panel\Desktop`, "/v", "MenuShowDelay"); return strings.Contains(o, "    0") },
+			revert: func() {
+				reg("add", `HKCU\Control Panel\Desktop`, "/v", "MenuShowDelay", "/t", "REG_SZ", "/d", "400", "/f")
+				reg("add", `HKCU\Control Panel\Desktop\WindowMetrics`, "/v", "MinAnimate", "/t", "REG_SZ", "/d", "1", "/f")
+			},
+			isApplied: func() bool { v, _ := regReadString("HKCU", `Control Panel\Desktop`, "MenuShowDelay"); return v == "0" },
 		},
-		{ID: "nagle", Group: "Производительность и FPS", Name: "Снизить задержку в онлайн-играх (отключить Nagle)",
-			Desc: "Убирает объединение мелких сетевых пакетов — ниже пинг и меньше рывков в сетевых играх. Нужна перезагрузка.", Reboot: true,
+		{ID: "nagle", Group: "Производительность и FPS", Name: "Отключить задержку TCP-подтверждений (Nagle)",
+			Desc: "Помогает только старым онлайн-играм на TCP (WoW, Lineage, часть MMO): меньше рывков при задержках сети. Современные шутеры (CS2, Valorant, Fortnite, Apex) работают по UDP — на них не влияет. Нужна перезагрузка.", Reboot: true,
 			apply: func() {
-				psScript := `Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks' -ErrorAction SilentlyContinue | Out-Null
-$base='HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces'
+				ps(`$base='HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces'
 Get-ChildItem $base | ForEach-Object {
   New-ItemProperty -Path $_.PSPath -Name 'TcpAckFrequency' -Value 1 -PropertyType DWord -Force | Out-Null
   New-ItemProperty -Path $_.PSPath -Name 'TCPNoDelay' -Value 1 -PropertyType DWord -Force | Out-Null
-}`
-				ps(psScript)
+}`)
 			},
 			revert: func() {
 				ps(`$base='HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces'
@@ -313,20 +423,26 @@ Get-ChildItem $base | ForEach-Object { Remove-ItemProperty -Path $_.PSPath -Name
 			},
 		},
 		{ID: "vbs", Group: "Производительность и FPS", Name: "Отключить VBS (виртуализация безопасности)",
-			Desc: "Снижает задержку памяти и может дать прирост FPS в играх.", Reboot: true, VBS: true,
+			Desc: "Самый заметный твик для игр: в части игр +5–10% FPS и ровнее 1% low. Microsoft сама советует его геймерам. Взамен — слабее защита ядра.", Reboot: true, VBS: true,
 			Details: "VBS (Virtualization-Based Security) — функция защиты Windows, которая запускает часть ядра системы в отдельной виртуальной машине. Она защищает от вредоносных драйверов и кражи паролей, но постоянно работающий гипервизор добавляет задержку при работе с памятью и процессором.\n\nЧто даст отключение:\n• ниже задержка памяти (обычно на 3–7 нс в AIDA64);\n• прирост FPS в части игр, сильнее всего — в 1% low (меньше просадок);\n• чуть меньше нагрузки на систему в фоне.\n\nЧем вы жертвуете:\n• защитой ядра от вредоносных драйверов и некоторых видов атак;\n• перестанут работать WSL2, Hyper-V, Windows Sandbox и Android-эмуляторы на базе Hyper-V.\n\nИзменения вступают в силу после перезагрузки и полностью откатываются кнопкой «Вернуть как было».",
 			apply:     vbsApply,
 			revert:    vbsRevert,
 			isApplied: vbsTweakApplied,
 		},
-		{ID: "reserved", Group: "Фоновые процессы", Name: "Освободить ~7 ГБ «зарезервированного хранилища»",
-			Desc: "Windows держит 7 ГБ диска «про запас» под обновления. Отключаем — место возвращается. Нужна перезагрузка.", Reboot: true,
-			apply:     func() { regDword("HKLM", `SOFTWARE\Microsoft\Windows\CurrentVersion\ReserveManager`, "ShippedWithReserves", 0) },
-			revert:    func() { regDword("HKLM", `SOFTWARE\Microsoft\Windows\CurrentVersion\ReserveManager`, "ShippedWithReserves", 1) },
+		{ID: "reserved", Group: "Место на диске", Name: "Освободить ~7 ГБ «зарезервированного хранилища»",
+			Desc: "Windows держит около 7 ГБ диска «про запас» под обновления. Отключаем — место возвращается. На скорость не влияет. Если сейчас ставится обновление, место освободится после его завершения.",
+			apply: func() {
+				run("DISM.exe", "/Online", "/Set-ReservedStorageState", "/State:Disabled", "/NoRestart")
+				regDword("HKLM", `SOFTWARE\Microsoft\Windows\CurrentVersion\ReserveManager`, "ShippedWithReserves", 0)
+			},
+			revert: func() {
+				run("DISM.exe", "/Online", "/Set-ReservedStorageState", "/State:Enabled", "/NoRestart")
+				regDword("HKLM", `SOFTWARE\Microsoft\Windows\CurrentVersion\ReserveManager`, "ShippedWithReserves", 1)
+			},
 			isApplied: func() bool { return dwordIs("HKLM", `SOFTWARE\Microsoft\Windows\CurrentVersion\ReserveManager`, "ShippedWithReserves", 0) },
 		},
-		{ID: "hibernate", Group: "Фоновые процессы", Name: "Отключить гибернацию (освобождает место на диске)",
-			Desc: "Удаляет файл hiberfil.sys (обычно несколько ГБ). Быстрый запуск останется через обычный сон.",
+		{ID: "hibernate", Group: "Место на диске", Name: "Отключить гибернацию",
+			Desc: "Удаляет файл hiberfil.sys (обычно 40% от объёма ОЗУ). Вместе с ним отключается «Быстрый запуск» — включение с нуля станет на пару секунд дольше, зато каждый запуск «чистый». Сон работает как раньше.",
 			apply:     func() { run("powercfg.exe", "/h", "off") },
 			revert:    func() { run("powercfg.exe", "/h", "on") },
 			isApplied: func() bool { _, err := os.Stat(os.Getenv("SystemDrive") + `\hiberfil.sys`); return err != nil },
@@ -341,9 +457,7 @@ func (t Tweak) toMap() map[string]interface{} {
 	}
 }
 func apiTweaks() []map[string]interface{} {
-	if tweakDefs == nil {
-		initTweaks()
-	}
+	ensureTweaks()
 	res := []map[string]interface{}{}
 	for _, t := range tweakDefs {
 		res = append(res, t.toMap())
@@ -359,9 +473,7 @@ func findTweak(id string) *Tweak {
 	return nil
 }
 func apiApplyTweaks(ids []string) bool {
-	if tweakDefs == nil {
-		initTweaks()
-	}
+	ensureTweaks()
 	for _, id := range ids {
 		if t := findTweak(id); t != nil {
 			safe(t.Name, t.apply)
@@ -370,9 +482,7 @@ func apiApplyTweaks(ids []string) bool {
 	return true
 }
 func apiApplyAll() bool {
-	if tweakDefs == nil {
-		initTweaks()
-	}
+	ensureTweaks()
 	logLine("INFO", "=== Автонастройка: старт ===")
 	createRestorePoint()
 	for i := range tweakDefs {
@@ -385,9 +495,7 @@ func apiApplyAll() bool {
 	return true
 }
 func apiRevertAll() bool {
-	if tweakDefs == nil {
-		initTweaks()
-	}
+	ensureTweaks()
 	logLine("INFO", "=== Откат изменений ===")
 	for i := range tweakDefs {
 		if tweakDefs[i].revert != nil {
