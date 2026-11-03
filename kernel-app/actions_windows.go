@@ -512,8 +512,9 @@ func apiReboot() bool {
 func removeEdgeFull() Result {
 	logLine("INFO", "=== Полное удаление Microsoft Edge ===")
 
-	// 1) Закрыть всё, что связано с Edge и его апдейтером
-	for _, p := range []string{"msedge.exe", "msedgewebview2.exe", "MicrosoftEdgeUpdate.exe", "identity_helper.exe"} {
+	// 1) Закрыть всё, что связано с Edge и его апдейтером.
+	// msedgewebview2.exe НЕ трогаем: в нём работает окно самого KERNEL, а деинсталлятору Edge он не мешает.
+	for _, p := range []string{"msedge.exe", "MicrosoftEdgeUpdate.exe", "identity_helper.exe"} {
 		run("taskkill", "/f", "/im", p)
 	}
 
