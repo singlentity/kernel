@@ -122,6 +122,8 @@ func main() {
 	bind("freshApply", apiFreshApply)
 	bind("setWallpaper", apiSetWallpaper)
 	bind("pinInfo", apiPinInfo)
+	bind("procCount", apiProcCount)
+	bind("driverScan", apiDriverScan)
 
 	w.Navigate(url)
 	w.Run()

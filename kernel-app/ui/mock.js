@@ -62,12 +62,16 @@ const MOCK = {
   pinInfo:()=>({blocked:true,msg:'Windows 11 хранит закреплённые приложения в закрытом файле start2.bin и не даёт менять их скриптом. Проще закрепить вручную: правый клик по приложению → «Закрепить на начальном экране».'}),
   defenderStatus:()=>({realtime:true, tamper:true}),
   driverList:()=>[
-    {name:'NVIDIA GeForce RTX 3060',cur:'551.86',new:'560.94',update:true},
-    {name:'Realtek High Definition Audio',cur:'6.0.9231.1',new:'6.0.9565.1',update:true},
-    {name:'Intel Chipset',cur:'10.1.19199',new:'10.1.19199',update:false},
-    {name:'Realtek PCIe GbE Family Controller',cur:'10.68.1130',new:'10.70.0205',update:true},
-    {name:'Samsung NVMe SSD',cur:'3.3.0.2003',new:'3.3.0.2003',update:false},
+    {name:'NVIDIA GeForce RTX 5070',cur:'32.0.16.2101',date:'2026-10-19',age:0,provider:'NVIDIA',cls:'display',vendor:'https://www.nvidia.com/ru-ru/software/nvidia-app/'},
+    {name:'AMD SMBUS',cur:'2.0.0.29',date:'2025-08-07',age:14,provider:'Advanced Micro Devices, Inc',cls:'system',vendor:'https://www.amd.com/ru/support/download/drivers.html'},
+    {name:'Realtek Gaming 2.5GbE Family Controller',cur:'1125.31.50.603',date:'2026-03-06',age:7,provider:'Realtek',cls:'net',vendor:''},
+    {name:'Realtek High Definition Audio',cur:'6.0.9982.1',date:'2026-04-27',age:6,provider:'Realtek Semiconductor Corp.',cls:'media',vendor:''},
   ],
+  driverScan:()=>new Promise(r=>setTimeout(()=>r({ok:true,list:[
+    {id:'a1',title:'Realtek - Net - 10.72.0.0',provider:'Realtek',date:'2026-09-12'},
+    {id:'b2',title:'Realtek Semiconductor Corp. - MEDIA - 6.0.9990.1',provider:'Realtek Semiconductor Corp.',date:'2026-08-30'},
+  ]}),1500)),
+  procCount:()=>214,
   logLines:()=>[
     {ts:'20:11:04',lv:'INFO',msg:'KERNEL запущен · Windows 11 Pro 23H2 · права администратора'},
     {ts:'20:11:22',lv:'INFO',msg:'Создана точка восстановления «KERNEL»'},

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -265,6 +266,19 @@ func initTweaks() {
 			revert:      func() { dxGlobalSet("SwapEffectUpgradeEnable", "") },
 			isApplied:   func() bool { return dxGlobalHas("SwapEffectUpgradeEnable=1") },
 		},
+		{ID: "vrr", Group: "Производительность и FPS", Name: "G-Sync / FreeSync для всех игр",
+			Desc:        "Включает переменную частоту обновления и в тех DirectX 11/12 играх, которые сами её не поддерживают. Нет разрывов кадра без V-Sync и его задержки. Работает, если монитор поддерживает G-Sync/FreeSync; на остальных ничего не меняет.",
+			Recommended: true,
+			apply:       func() { dxGlobalSet("VRROptimizeEnable", "1") },
+			revert:      func() { dxGlobalSet("VRROptimizeEnable", "") },
+			isApplied:   func() bool { return dxGlobalHas("VRROptimizeEnable=1") },
+		},
+		{ID: "throttle", Group: "Производительность и FPS", Name: "Отключить энергосбережение фоновых программ",
+			Desc: "Windows урезает частоту процессора для свёрнутых программ (EcoQoS). Если во время игры в фоне идёт стрим (OBS), Discord или запись — они перестанут подтормаживать и не будут «дёргать» игру. Без фоновых программ эффекта нет. На ноутбуке чуть сильнее тратится батарея.", Reboot: true,
+			apply:     func() { regDword("HKLM", `SYSTEM\CurrentControlSet\Control\Power\PowerThrottling`, "PowerThrottlingOff", 1) },
+			revert:    func() { regDel("HKLM", `SYSTEM\CurrentControlSet\Control\Power\PowerThrottling`, "PowerThrottlingOff") },
+			isApplied: func() bool { return dwordIs("HKLM", `SYSTEM\CurrentControlSet\Control\Power\PowerThrottling`, "PowerThrottlingOff", 1) },
+		},
 		{ID: "gamedvr", Group: "Производительность и FPS", Name: "Отключить запись игр (Game DVR)",
 			Desc:        "Выключает фоновую запись Xbox Game Bar. Если запись «последних 30 секунд» была включена, она постоянно кодирует видео и отнимает несколько процентов FPS. Если не была — прироста не будет, но и вреда нет.",
 			Recommended: true,
@@ -448,6 +462,11 @@ Get-ChildItem $base | ForEach-Object { Remove-ItemProperty -Path $_.PSPath -Name
 			isApplied: func() bool { _, err := os.Stat(os.Getenv("SystemDrive") + `\hiberfil.sys`); return err != nil },
 		},
 	}
+	tweakDefs = append(tweakDefs, backgroundTweaks()...)
+
+	// Порядок разделов на вкладке «Ускорение»
+	order := map[string]int{"Производительность и FPS": 0, "Фоновые процессы": 1, "Фоновые службы (по выбору)": 2, "Интерфейс": 3, "Место на диске": 4}
+	sort.SliceStable(tweakDefs, func(i, j int) bool { return order[tweakDefs[i].Group] < order[tweakDefs[j].Group] })
 }
 func (t Tweak) toMap() map[string]interface{} {
 	return map[string]interface{}{
@@ -810,42 +829,116 @@ func apiOpenDefender() bool {
 }
 
 /* ============ Драйверы ============ */
+// Ключевые устройства: видеокарта, сеть, звук, Bluetooth, чипсет — с версией и датой драйвера.
+// Встроенные драйверы Microsoft не показываем: они обновляются вместе с Windows (и у них фиктивные даты 2006 года).
 func apiDriverList() []map[string]interface{} {
 	out := psLine(`
-Get-CimInstance Win32_PnPSignedDriver | Where-Object { $_.DeviceName -and ($_.DeviceClass -in 'DISPLAY','MEDIA','NET','SYSTEM','HDC','USB') } |
-  Select-Object -First 14 DeviceName, DriverVersion |
-  Sort-Object DeviceName -Unique | ConvertTo-Json -Compress`)
-	var devs []struct{ DeviceName, DriverVersion string }
+Get-CimInstance Win32_PnPSignedDriver | Where-Object {
+  $_.DeviceName -and $_.DriverVersion -and $_.DriverProviderName -notmatch '^Microsoft' -and $_.DeviceID -match '^(PCI|USB|HDAUDIO|BTH|SWD\\DRIVERENUM)' -and
+  ($_.DeviceClass -in 'DISPLAY','NET','MEDIA','BLUETOOTH' -or ($_.DeviceClass -eq 'SYSTEM' -and $_.DeviceName -match 'chipset|SMBus|PSP|GPIO|I2C|Management Engine|Serial IO|Platform'))
+} | Sort-Object DeviceName -Unique | Select-Object -First 30 DeviceName, DriverVersion, DriverProviderName, DeviceClass,
+  @{n='Date';e={ if($_.DriverDate){ $_.DriverDate.ToString('yyyy-MM-dd') } else { '' } }} | ConvertTo-Json -Compress`)
+	if strings.HasPrefix(out, "{") {
+		out = "[" + out + "]"
+	}
+	var devs []struct{ DeviceName, DriverVersion, DriverProviderName, DeviceClass, Date string }
 	json.Unmarshal([]byte(out), &devs)
 	res := []map[string]interface{}{}
 	for _, d := range devs {
-		if d.DeviceName == "" {
-			continue
+		age := -1
+		if t, err := time.Parse("2006-01-02", d.Date); err == nil {
+			age = int(time.Since(t).Hours() / 24 / 30)
 		}
 		res = append(res, map[string]interface{}{
-			"name": d.DeviceName, "cur": d.DriverVersion, "new": d.DriverVersion, "update": false,
+			"name": d.DeviceName, "cur": d.DriverVersion, "provider": d.DriverProviderName,
+			"cls": strings.ToLower(d.DeviceClass), "date": d.Date, "age": age, "vendor": vendorDriverURL(d.DeviceName, d.DeviceClass),
 		})
-	}
-	if len(res) == 0 {
-		res = append(res, map[string]interface{}{"name": "Нажмите «Проверить обновления»", "cur": "—", "new": "—", "update": false})
 	}
 	return res
 }
-func apiUpdateDrivers() bool {
-	safe("Поиск драйверов через Windows Update", func() {
-		ps(`
-$ErrorActionPreference='SilentlyContinue'
-$s=New-Object -ComObject Microsoft.Update.Session
-$sr=$s.CreateUpdateSearcher()
-$r=$sr.Search("IsInstalled=0 and Type='Driver'")
-if($r.Updates.Count -gt 0){
+
+// Официальные страницы драйверов: для видеокарт и чипсетов Windows Update обычно отстаёт на месяцы
+func vendorDriverURL(name, cls string) string {
+	n := strings.ToLower(name)
+	gpu := strings.EqualFold(cls, "DISPLAY")
+	switch {
+	case gpu && (strings.Contains(n, "nvidia") || strings.Contains(n, "geforce")):
+		return "https://www.nvidia.com/ru-ru/software/nvidia-app/"
+	case (gpu || strings.EqualFold(cls, "SYSTEM")) && (strings.Contains(n, "amd") || strings.Contains(n, "radeon")):
+		return "https://www.amd.com/ru/support/download/drivers.html"
+	case (gpu || strings.EqualFold(cls, "SYSTEM")) && strings.Contains(n, "intel"):
+		return "https://www.intel.com/content/www/us/en/support/detect.html"
+	}
+	return ""
+}
+
+// Поиск обновлений драйверов в Windows Update (только поиск, ничего не ставит). Занимает 10–60 секунд.
+func apiDriverScan() map[string]interface{} {
+	out, _ := ps(`
+$ErrorActionPreference='Stop'
+try{
+  $s=New-Object -ComObject Microsoft.Update.Session
+  $r=$s.CreateUpdateSearcher().Search("IsInstalled=0 and Type='Driver'")
+  $list=@(foreach($u in $r.Updates){
+    [pscustomobject]@{id=$u.Identity.UpdateID; title=$u.Title; provider=$u.DriverProvider; model=$u.DriverModel; cls=$u.DriverClass;
+      date=$(if($u.DriverVerDate){ ([datetime]$u.DriverVerDate).ToString('yyyy-MM-dd') } else { '' })}
+  })
+  ConvertTo-Json -Compress -InputObject @{ok=$true; list=$list}
+}catch{ ConvertTo-Json -Compress -InputObject @{ok=$false; msg=$_.Exception.Message} }`)
+	var r struct {
+		Ok   bool                     `json:"ok"`
+		Msg  string                   `json:"msg"`
+		List []map[string]interface{} `json:"list"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &r); err != nil || !r.Ok {
+		logLine("ERR", "Поиск драйверов в Windows Update не удался: "+r.Msg)
+		return map[string]interface{}{"ok": false, "msg": "Windows Update не ответил. Проверьте интернет и что служба «Центр обновления Windows» не отключена."}
+	}
+	if r.List == nil {
+		r.List = []map[string]interface{}{}
+	}
+	logLine("INFO", fmt.Sprintf("Windows Update: найдено обновлений драйверов — %d", len(r.List)))
+	return map[string]interface{}{"ok": true, "list": r.List}
+}
+
+// Установка выбранных обновлений драйверов (по UpdateID из apiDriverScan)
+func apiUpdateDrivers(ids []string) map[string]interface{} {
+	if len(ids) == 0 {
+		return map[string]interface{}{"ok": false, "msg": "Не выбрано ни одного драйвера"}
+	}
+	quoted := make([]string, 0, len(ids))
+	for _, id := range ids {
+		quoted = append(quoted, "'"+strings.ReplaceAll(id, "'", "")+"'")
+	}
+	logLine("INFO", fmt.Sprintf("=== Установка драйверов из Windows Update (%d) ===", len(ids)))
+	out, _ := ps(fmt.Sprintf(`
+$ErrorActionPreference='Stop'
+try{
+  $want=@(%s)
+  $s=New-Object -ComObject Microsoft.Update.Session
+  $r=$s.CreateUpdateSearcher().Search("IsInstalled=0 and Type='Driver'")
   $c=New-Object -ComObject Microsoft.Update.UpdateColl
-  foreach($u in $r.Updates){ $c.Add($u) | Out-Null }
-  $d=$s.CreateUpdateDownloader(); $d.Updates=$c; $d.Download()
-  $i=$s.CreateUpdateInstaller(); $i.Updates=$c; $i.Install()
-}`)
-	})
-	return true
+  foreach($u in $r.Updates){ if($want -contains $u.Identity.UpdateID){ if(-not $u.EulaAccepted){$u.AcceptEula()}; $c.Add($u) | Out-Null } }
+  if($c.Count -eq 0){ '{"ok":false,"done":0,"total":0,"reboot":false}'; return }
+  $d=$s.CreateUpdateDownloader(); $d.Updates=$c; $d.Download() | Out-Null
+  $i=$s.CreateUpdateInstaller(); $i.Updates=$c; $res=$i.Install()
+  $ok=0; for($k=0;$k -lt $c.Count;$k++){ if($res.GetUpdateResult($k).ResultCode -eq 2){$ok++} }
+  ConvertTo-Json -Compress -InputObject @{ok=($ok -gt 0); done=$ok; total=$c.Count; reboot=$res.RebootRequired}
+}catch{ ConvertTo-Json -Compress -InputObject @{ok=$false; done=0; total=0; reboot=$false; msg=$_.Exception.Message} }`, strings.Join(quoted, ",")))
+	var r struct {
+		Ok          bool
+		Done, Total int
+		Reboot      bool
+		Msg         string
+	}
+	json.Unmarshal([]byte(strings.TrimSpace(out)), &r)
+	if r.Total == 0 {
+		logLine("ERR", "Драйверы не установлены: "+orDash(r.Msg))
+		return map[string]interface{}{"ok": false, "msg": "Не удалось установить драйверы. Подробности — в Журнале."}
+	}
+	logLine("OK", fmt.Sprintf("Установлено драйверов: %d из %d", r.Done, r.Total))
+	msg := fmt.Sprintf("Установлено драйверов: %d из %d.", r.Done, r.Total)
+	return map[string]interface{}{"ok": r.Ok, "msg": msg, "reboot": r.Reboot}
 }
 func apiBackupDrivers() bool {
 	safe("Резервная копия драйверов", func() {
