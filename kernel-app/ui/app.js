@@ -50,18 +50,7 @@ function renderTabs(){
     `<div class="tab ${t.id===STATE.tab?'active':''}" data-tab="${t.id}" title="${t.name}">${t.ic}<span>${t.name}</span></div>`
   ).join('');
   document.querySelectorAll('.tab').forEach(el=>el.onclick=()=>switchTab(el.dataset.tab));
-  fitTabs();
 }
-/* Подгоняем вкладки под ширину окна: полные подписи, если влезают, иначе — иконки */
-function fitTabs(){
-  const bar=document.getElementById('tabs'); if(!bar) return;
-  bar.classList.remove('compact');
-  if(bar.scrollWidth > bar.clientWidth+1) bar.classList.add('compact');
-  const a=bar.querySelector('.tab.active');
-  if(a && bar.scrollWidth > bar.clientWidth+1) a.scrollIntoView({block:'nearest',inline:'nearest'});
-}
-window.addEventListener('resize', ()=>{ clearTimeout(window.__ft); window.__ft=setTimeout(fitTabs,60); });
-document.fonts && document.fonts.ready && document.fonts.ready.then(fitTabs);
 function switchTab(id){ STATE.tab=id; renderTabs(); renderPage(); checkUpdates(); }
 
 const LOADING = {
