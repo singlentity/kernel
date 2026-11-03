@@ -10,13 +10,13 @@ import (
 /* ===== Проверка обновлений ===== */
 
 // Текущая версия этой сборки. Поднимай при каждом релизе.
-const AppVersion = "1.5.0"
+const AppVersion = "1.6.0"
 
 // Адрес манифеста с информацией о последней версии (простой JSON).
 // ЗАМЕНИ на свой: GitHub raw, Gist raw или любой публичный URL, отдающий JSON вида:
 //   {"version":"1.6.0","url":"https://t.me/kernel1lab/123","notes":"Что нового"}
 // url — ссылка, которую откроет кнопка «Скачать» (можно на пост в Telegram с .exe).
-const UpdateManifestURL = "https://raw.githubusercontent.com/kernel1lab/kernel/main/version.json"
+const UpdateManifestURL = "https://raw.githubusercontent.com/singlentity/kernel/main/version.json"
 
 type updateManifest struct {
 	Version string `json:"version"`

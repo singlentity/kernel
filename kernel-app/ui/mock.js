@@ -44,8 +44,8 @@ const MOCK = {
   ],
   vbsStatus:()=>({status:2,text:'работает'}),
   vbsRevert:()=>({ok:true,msg:'VBS возвращён к исходному состоянию.'}),
-  appVersion:()=>'1.5.0',
-  checkUpdate:()=>({available:true,current:'1.5.0',latest:'1.6.0',url:'https://t.me/kernel1lab',notes:'Новый анализ баланса системы'}),
+  appVersion:()=>'1.6.0',
+  checkUpdate:()=>({available:true,current:'1.6.0',latest:'1.7.0',url:'https://t.me/kernel1lab',notes:'Новый анализ баланса системы'}),
   balance:()=>({cpu:'AMD Ryzen 7 9800X3D 8-Core',gpu:'AMD Radeon(TM) Graphics + NVIDIA GeForce RTX 5070',cpuTier:100,gpuTier:72,kind:'gpu',known:true,verdict:'Видеокарта — главное ограничение. Процессор с большим запасом: упор идёт в GPU почти при любом качестве, а на высоком разрешении (4K, DLAA) — тем более. CPU раскрывается только в киберспорте на низких настройках ради сотен FPS.'}),
   freshList:()=>[
     {id:'startclean',name:'Чистое меню Пуск',desc:'Убирает из Пуска рекомендации, рекламу, «недавно добавленные» и советы Microsoft. Остаётся только то, что закрепили вы.',on:true,applied:true},
