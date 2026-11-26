@@ -1,5 +1,5 @@
 {
-  "version": "1.6.0",
+  "version": "1.6.1",
   "url": "https://github.com/singlentity/kernel/releases/latest",
-  "notes": "Новый дизайн, новые твики для игр, автообновление драйверов"
+  "notes": "Исправлены твики, которые могли снижать FPS, и точка восстановления"
 }
