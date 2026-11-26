@@ -1,0 +1,93 @@
+# Сборка и выпуск KERNEL.
+#
+# На каждый пуш в main: собирает KERNEL.exe на Windows (проверка, что код компилируется).
+# Если версия AppVersion в kernel-app/update_windows.go новая (релиза vX.Y.Z ещё нет):
+#   1. создаёт GitHub Release vX.Y.Z с KERNEL.exe и описанием из RELEASE.md;
+#   2. обновляет version.json в main — после этого у всех пользователей
+#      в KERNEL появляется плашка «Доступно обновление».
+name: Build & Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "kernel-app/**"
+      - "deps/**"
+      - "RELEASE.md"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Версия
+        id: v
+        run: |
+          ver=$(sed -n 's/.*const AppVersion = "\([^"]*\)".*/\1/p' kernel-app/update_windows.go)
+          if [ -z "$ver" ]; then echo "::error::Не найдена AppVersion в update_windows.go"; exit 1; fi
+          echo "ver=$ver" >> "$GITHUB_OUTPUT"
+          if gh release view "v$ver" >/dev/null 2>&1; then
+            echo "new=0" >> "$GITHUB_OUTPUT"
+            echo "Релиз v$ver уже есть — только проверочная сборка."
+          else
+            echo "new=1" >> "$GITHUB_OUTPUT"
+            echo "Новая версия v$ver — будет релиз."
+          fi
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: kernel-app/go.mod
+          cache: false
+
+      - name: Сборка KERNEL.exe
+        working-directory: kernel-app
+        run: |
+          go vet ./... || true
+          go build -ldflags="-H windowsgui -s -w" -o KERNEL.exe .
+          ls -la KERNEL.exe
+
+      - name: Сохранить сборку
+        uses: actions/upload-artifact@v4
+        with:
+          name: KERNEL-${{ steps.v.outputs.ver }}
+          path: kernel-app/KERNEL.exe
+
+      - name: Релиз на GitHub
+        if: steps.v.outputs.new == '1'
+        run: |
+          ver="${{ steps.v.outputs.ver }}"
+          if [ ! -s RELEASE.md ]; then echo "::error::Заполни RELEASE.md — что нового в версии"; exit 1; fi
+          gh release create "v$ver" kernel-app/KERNEL.exe \
+            --title "KERNEL $ver" \
+            --notes-file RELEASE.md \
+            --target "$GITHUB_SHA"
+
+      - name: Уведомление пользователям (version.json)
+        if: steps.v.outputs.new == '1'
+        run: |
+          ver="${{ steps.v.outputs.ver }}"
+          # Первая непустая строка RELEASE.md — короткий текст для плашки в программе
+          notes=$(grep -v '^[[:space:]]*$' RELEASE.md | head -n1 | sed 's/^[#*[:space:]-]*//')
+          jq -n --arg v "$ver" --arg n "$notes" \
+            '{version:$v, url:"https://github.com/singlentity/kernel/releases/latest", notes:$n}' > version.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add version.json
+          git commit -m "version.json → $ver"
+          git pull --rebase origin main
+          git push origin HEAD:main
