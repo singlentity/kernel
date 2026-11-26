@@ -7,7 +7,6 @@ const I = { // иконки
   grid:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>',
   globe:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.5 3 14 0 18M12 3c-3 3.5-3 14 0 18"/></svg>',
   box:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7.5 12 3l9 4.5v9L12 21 3 16.5z"/><path d="M3 7.5 12 12l9-4.5M12 12v9" stroke-linejoin="round"/></svg>',
-  shield:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z" stroke-linejoin="round"/></svg>',
   chip:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg>',
   list:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" stroke-linecap="round"/></svg>',
   cpu:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="7" y="7" width="10" height="10" rx="1.5"/><path d="M10 2v3M14 2v3M10 19v3M14 19v3M2 10h3M2 14h3M19 10h3M19 14h3"/></svg>',
@@ -30,7 +29,6 @@ const TABS = [
   {id:'uwp', name:'Приложения', ic:I.grid},
   {id:'edge', name:'Edge', ic:I.globe},
   {id:'apps', name:'Программы', ic:I.box},
-  {id:'shield', name:'Защита', ic:I.shield},
   {id:'drivers', name:'Драйверы', ic:I.chip},
   {id:'log', name:'Журнал', ic:I.list},
 ];
@@ -55,7 +53,7 @@ function switchTab(id){ STATE.tab=id; renderTabs(); renderPage(); checkUpdates()
 
 const LOADING = {
   clean:'Сканирую мусор…', uwp:'Загружаю приложения Windows…', fresh:'Загружаю настройки…', 
-  drivers:'Опрашиваю устройства…', shield:'Проверяю статус защиты…', home:'Читаю сведения о системе…'
+  drivers:'Опрашиваю устройства…', home:'Читаю сведения о системе…'
 };
 async function renderPage(){
   const c = document.getElementById('content');
@@ -69,7 +67,6 @@ async function renderPage(){
   if (STATE.tab==='uwp') return renderUwp(p);
   if (STATE.tab==='edge') return renderEdge(p);
   if (STATE.tab==='apps') return renderApps(p);
-  if (STATE.tab==='shield') return renderShield(p);
   if (STATE.tab==='drivers') return renderDrivers(p);
   if (STATE.tab==='log') return renderLog(p);
 }
@@ -337,34 +334,6 @@ async function renderApps(p){
   <div class="apps-grid">${apps.filter(a=>a.cat==='Браузер').map(card).join('')}</div>`;
 }
 
-/* -------- ЗАЩИТА -------- */
-async function renderShield(p){
-  const d = await go('defenderStatus');
-  p.innerHTML = `
-  <div class="page-head"><h1>Защита системы</h1>
-    <p>Статус встроенной защиты Windows. KERNEL не отключает антивирус за вас — но показывает состояние и открывает нужное окно настроек одной кнопкой.</p></div>
-  <div class="shield-status">
-    <div class="shield-card ${d.realtime?'on':'off'}">
-      <div class="ring">${d.realtime?I.check:I.x}</div>
-      <div><div class="st">Защита в реальном времени</div><div class="ds">${d.realtime?'включена':'отключена'}</div></div>
-    </div>
-    <div class="shield-card ${d.tamper?'on':'off'}">
-      <div class="ring">${d.tamper?I.check:I.x}</div>
-      <div><div class="st">Защита от подделки</div><div class="ds">${d.tamper?'включена':'отключена'}</div></div>
-    </div>
-  </div>
-  <div class="card">
-    <div style="display:flex;gap:14px;align-items:flex-start">
-      <div style="color:var(--amber);flex-shrink:0;width:22px">${I.warn}</div>
-      <div>
-        <div style="font-size:15px;font-weight:600;margin-bottom:6px">Выключить защиту можно только вручную</div>
-        <p style="color:var(--dim);font-size:13px;line-height:1.6;max-width:640px">Отключение Windows Defender — это ваш осознанный выбор, а не действие «оптимизатора». Нажмите кнопку ниже: откроется окно «Безопасность Windows», где вы сами переключите нужные настройки. Так вы всегда понимаете, что защита выключена именно вами.</p>
-        <button class="btn gold" style="margin-top:16px" onclick="doOpenDefender()">${I.shield} Открыть «Безопасность Windows»</button>
-      </div>
-    </div>
-  </div>`;
-}
-
 /* -------- ДРАЙВЕРЫ -------- */
 async function renderDrivers(p){
   if (STATE.drvScan===undefined) { scanDrivers(); return; } // при первом открытии сразу ищем обновления
@@ -463,7 +432,7 @@ async function act(title, sub, fn, needReboot){
 }
 
 async function runBoostAll(){ await act('Настраиваю систему…','Создаю точку восстановления и применяю постоянные настройки. Обычно 1–2 минуты.',
-  async()=>{ await go('applyAll'); return {ok:true,msg:'Система настроена. Все изменения постоянные и записаны в Журнал.'}; }, true); }
+  ()=>go('applyAll'), true); }
 async function applySelectedTweaks(){ const ids=[...document.querySelectorAll('[data-tw]:checked')].map(e=>e.dataset.tw);
   if(!ids.length) return;
   if(ids.includes('vbs') && !(STATE.tweaks.find(t=>t.id==='vbs')||{}).applied){
@@ -473,7 +442,7 @@ async function applySelectedTweaks(){ const ids=[...document.querySelectorAll('[
     if(!ok) return;
   }
   const rb = ids.some(i=>(STATE.tweaks.find(t=>t.id===i)||{}).reboot);
-  await act('Применяю настройки…', ids.length+' шт.', async()=>{ await go('applyTweaks',ids); return {ok:true,msg:'Настройки применены и сохранятся навсегда.'}; }, rb); }
+  await act('Применяю настройки…', ids.length+' шт.', ()=>go('applyTweaks',ids), rb); }
 async function revertTweaks(){ await act('Откатываю изменения…','', async()=>{ await go('revertAll'); return {ok:true,msg:'Все настройки KERNEL возвращены к стандартным.'}; }); }
 async function runClean(){ const ids=[...document.querySelectorAll('[data-cl]:checked')].map(e=>e.dataset.cl);
   if(!ids.length) return;
@@ -486,7 +455,6 @@ async function doRemoveComp(k){ await act('Удаляю '+COMP_NAMES[k]+'…','�
 async function doInstall(id){ const a=(STATE.apps||[]).find(x=>x.id===id);
   await act('Устанавливаю '+(a?a.name:id)+'…','Скачиваю официальный установщик на рабочий стол и ставлю программу. Это может занять пару минут.', ()=>go('install',id)); }
 async function doDownloadAll(){ await act('Скачиваю установщики…','Сохраняю всё в папку «KERNEL Программы» на рабочем столе.', ()=>go('downloadAll')); }
-async function doOpenDefender(){ await go('openDefender'); }
 async function scanDrivers(){
   STATE.drvScan='busy'; renderPage();
   const r = await go('driverScan');

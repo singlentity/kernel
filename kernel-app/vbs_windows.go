@@ -92,9 +92,10 @@ func vbsRevert() {
 			regDword("HKLM", vbsHVCIPath, "Enabled", b.Hvci)
 		}
 	} else {
-		// бэкапа нет — возвращаем значения по умолчанию
-		regDword("HKLM", vbsDGPath, "EnableVirtualizationBasedSecurity", 1)
-		regDword("HKLM", vbsHVCIPath, "Enabled", 1)
+		// бэкапа нет — убираем наш запрет и оставляем решение Windows, но не включаем
+		// VBS и «Целостность памяти» принудительно (раньше это могло снизить FPS)
+		regDel("HKLM", vbsDGPath, "EnableVirtualizationBasedSecurity")
+		regDel("HKLM", vbsHVCIPath, "Enabled")
 	}
 	run("bcdedit.exe", "/set", "hypervisorlaunchtype", hlt)
 	os.Remove(vbsBackupPath())

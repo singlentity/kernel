@@ -107,8 +107,6 @@ func main() {
 	bind("appsList", apiAppsList)
 	bind("install", apiInstall)
 	bind("downloadAll", apiDownloadAll)
-	bind("defenderStatus", apiDefenderStatus)
-	bind("openDefender", apiOpenDefender)
 	bind("driverList", apiDriverList)
 	bind("updateDrivers", apiUpdateDrivers)
 	bind("backupDrivers", apiBackupDrivers)

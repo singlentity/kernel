@@ -166,6 +166,9 @@ const (
 )
 
 func powerApply() {
+	if cur := activePowerScheme(); cur != "" && cur != kernelScheme {
+		origSave("powerscheme", cur) // откат вернёт именно эту схему
+	}
 	if !regKeyExists("HKLM", powerSchemesPath+`\`+kernelScheme) {
 		run("powercfg.exe", "-duplicatescheme", ultimateTemplate, kernelScheme)
 	}
@@ -202,7 +205,11 @@ func cleanupUltimateCopies() {
 }
 
 func powerRevert() {
-	run("powercfg.exe", "-setactive", balancedScheme)
+	back := balancedScheme
+	if v, ok := origTake("powerscheme"); ok && v != "" && v != kernelScheme && regKeyExists("HKLM", powerSchemesPath+`\`+v) {
+		back = v
+	}
+	run("powercfg.exe", "-setactive", back)
 	run("powercfg.exe", "/delete", kernelScheme)
 }
 
@@ -253,8 +260,8 @@ func ensureTweaks() { tweakOnce.Do(initTweaks) }
 func initTweaks() {
 	tweakDefs = []Tweak{
 		{ID: "power", Group: "Производительность и FPS", Name: "Схема питания «Максимальная производительность»",
-			Desc:        "Ядра процессора не «засыпают» и не сбрасывают частоту между кадрами — меньше микрозадержек и ровнее 1% low. Средний FPS на настольном ПК растёт мало (0–3%). На ноутбуке не рекомендуется: греет и быстро сажает батарею.",
-			Recommended: !hasBattery(),
+			Desc:        "Ядра процессора не «засыпают» и не сбрасывают частоту между кадрами — меньше микрозадержек и ровнее 1% low. Средний FPS на настольном ПК растёт мало (0–3%). На ноутбуке не рекомендуется: греет и быстро сажает батарею. На Ryzen 7900X3D/7950X3D/9900X3D/9950X3D лучше не включать: драйвер AMD держит игру на ядрах с 3D-кэшем только в «Сбалансированной» схеме, и в части игр FPS может снизиться.",
+			Recommended: !hasBattery() && !isDualCcdX3D(),
 			apply:       powerApply,
 			revert:      powerRevert,
 			isApplied:   func() bool { return activePowerScheme() == kernelScheme },
@@ -274,7 +281,7 @@ func initTweaks() {
 			isApplied:   func() bool { return dxGlobalHas("VRROptimizeEnable=1") },
 		},
 		{ID: "throttle", Group: "Производительность и FPS", Name: "Отключить энергосбережение фоновых программ",
-			Desc: "Windows урезает частоту процессора для свёрнутых программ (EcoQoS). Если во время игры в фоне идёт стрим (OBS), Discord или запись — они перестанут подтормаживать и не будут «дёргать» игру. Без фоновых программ эффекта нет. На ноутбуке чуть сильнее тратится батарея.", Reboot: true,
+			Desc: "Windows урезает частоту процессора для свёрнутых программ (EcoQoS). Если во время игры в фоне идёт стрим (OBS), Discord или запись — они перестанут подтормаживать и не будут «дёргать» игру. Без фоновых программ эффекта нет. На Intel 12–14 поколения может навредить: фоновые задачи перестают уходить на E-ядра и занимают P-ядра игры. На ноутбуке чуть сильнее тратится батарея.", Reboot: true,
 			apply:     func() { regDword("HKLM", `SYSTEM\CurrentControlSet\Control\Power\PowerThrottling`, "PowerThrottlingOff", 1) },
 			revert:    func() { regDel("HKLM", `SYSTEM\CurrentControlSet\Control\Power\PowerThrottling`, "PowerThrottlingOff") },
 			isApplied: func() bool { return dwordIs("HKLM", `SYSTEM\CurrentControlSet\Control\Power\PowerThrottling`, "PowerThrottlingOff", 1) },
@@ -291,14 +298,15 @@ func initTweaks() {
 			revert: func() {
 				regDword("HKCU", `System\GameConfigStore`, "GameDVR_Enabled", 1)
 				regDel("HKCU", `SOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR`, "AppCaptureEnabled")
+				regDel("HKCU", `SOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR`, "HistoricalCaptureEnabled")
 				regDel("HKLM", `SOFTWARE\Policies\Microsoft\Windows\GameDVR`, "AllowGameDVR")
 			},
 			isApplied: func() bool { return dwordIs("HKCU", `System\GameConfigStore`, "GameDVR_Enabled", 0) },
 		},
 		{ID: "hags", Group: "Производительность и FPS", Name: "Аппаратное ускорение планирования GPU (HAGS)",
 			Desc: "Видеокарта сама планирует свою очередь кадров. Обязательно для генерации кадров DLSS (RTX 40/50) — без HAGS она не включится. На старых видеокартах и драйверах иногда даёт фризы, поэтому по умолчанию не трогаем.", Recommended: false, Reboot: true,
-			apply:     func() { regDword("HKLM", `SYSTEM\CurrentControlSet\Control\GraphicsDrivers`, "HwSchMode", 2) },
-			revert:    func() { regDword("HKLM", `SYSTEM\CurrentControlSet\Control\GraphicsDrivers`, "HwSchMode", 1) },
+			apply:     func() { regDwordBackup("HKLM", `SYSTEM\CurrentControlSet\Control\GraphicsDrivers`, "HwSchMode", 2) },
+			revert:    func() { regDwordRestore("HKLM", `SYSTEM\CurrentControlSet\Control\GraphicsDrivers`, "HwSchMode") }, // HAGS часто включён Windows по умолчанию — не выключаем его, если включали не мы
 			isApplied: func() bool { return dwordIs("HKLM", `SYSTEM\CurrentControlSet\Control\GraphicsDrivers`, "HwSchMode", 2) },
 		},
 		{ID: "gamemode", Group: "Производительность и FPS", Name: "Игровой режим Windows",
@@ -313,7 +321,9 @@ func initTweaks() {
 				}
 			},
 			revert: func() {
-				regDword("HKCU", `SOFTWARE\Microsoft\GameBar`, "AutoGameModeEnabled", 0)
+				// игровой режим по умолчанию включён: убираем наши значения, а не выключаем его
+				regDel("HKCU", `SOFTWARE\Microsoft\GameBar`, "AllowAutoGameMode")
+				regDel("HKCU", `SOFTWARE\Microsoft\GameBar`, "AutoGameModeEnabled")
 				// возвращаем значения по умолчанию, убираем вредные твики старых версий
 				p := `SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile`
 				regDword("HKLM", p, "SystemResponsiveness", 20)
@@ -491,19 +501,20 @@ func findTweak(id string) *Tweak {
 	}
 	return nil
 }
-func apiApplyTweaks(ids []string) bool {
+func apiApplyTweaks(ids []string) Result {
 	ensureTweaks()
+	rpErr := createRestorePoint()
 	for _, id := range ids {
 		if t := findTweak(id); t != nil {
 			safe(t.Name, t.apply)
 		}
 	}
-	return true
+	return Result{true, "Настройки применены и сохранятся навсегда." + restoreNote(rpErr)}
 }
-func apiApplyAll() bool {
+func apiApplyAll() Result {
 	ensureTweaks()
 	logLine("INFO", "=== Автонастройка: старт ===")
-	createRestorePoint()
+	rpErr := createRestorePoint()
 	for i := range tweakDefs {
 		if tweakDefs[i].Recommended {
 			safe(tweakDefs[i].Name, tweakDefs[i].apply)
@@ -511,13 +522,15 @@ func apiApplyAll() bool {
 	}
 	safe("Очистка временных файлов", func() { cleanTemp() })
 	logLine("OK", "=== Автонастройка завершена ===")
-	return true
+	return Result{true, "Система настроена. Все изменения постоянные и записаны в Журнал." + restoreNote(rpErr)}
 }
 func apiRevertAll() bool {
 	ensureTweaks()
 	logLine("INFO", "=== Откат изменений ===")
 	for i := range tweakDefs {
-		if tweakDefs[i].revert != nil {
+		// откатываем только то, что сейчас применено: иначе «откат» включал VBS/HVCI
+		// и выключал HAGS у тех, кто эти пункты никогда не трогал
+		if tweakDefs[i].revert != nil && tweakDefs[i].isApplied() {
 			safe("Откат: "+tweakDefs[i].Name, tweakDefs[i].revert)
 		}
 	}
@@ -532,10 +545,59 @@ func safe(what string, f func()) {
 	f()
 	logLine("OK", what)
 }
-func createRestorePoint() {
-	safe("Точка восстановления системы", func() {
-		ps(`Enable-ComputerRestore -Drive "$env:SystemDrive\"; Checkpoint-Computer -Description "KERNEL" -RestorePointType MODIFY_SETTINGS`)
-	})
+/* ---- Точка восстановления ---- */
+// Windows по умолчанию создаёт не больше одной точки за 24 часа и просто молча пропускает
+// повторный запрос — поэтому раньше точка часто не появлялась, а в журнале было «OK».
+// Теперь на время снимаем это ограничение и проверяем, что точка действительно создана.
+var (
+	restoreMu   sync.Mutex
+	restoreDone bool // за один запуск KERNEL создаём одну точку — перед первым изменением
+)
+
+func createRestorePoint() error {
+	restoreMu.Lock()
+	defer restoreMu.Unlock()
+	if restoreDone {
+		return nil
+	}
+	logLine("INFO", "Создаю точку восстановления системы…")
+	out := psLine(`$ErrorActionPreference='Stop'
+$k='HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore'
+$old=(Get-ItemProperty $k -Name SystemRestorePointCreationFrequency -ErrorAction SilentlyContinue).SystemRestorePointCreationFrequency
+$start=Get-Date
+try{
+  Enable-ComputerRestore -Drive "$env:SystemDrive\"
+  Set-ItemProperty $k -Name SystemRestorePointCreationFrequency -Value 0 -Type DWord
+  Checkpoint-Computer -Description 'KERNEL' -RestorePointType MODIFY_SETTINGS -WarningAction SilentlyContinue
+  $p=Get-ComputerRestorePoint | Where-Object { $_.Description -eq 'KERNEL' } | Sort-Object SequenceNumber | Select-Object -Last 1
+  if($p -and [Management.ManagementDateTimeConverter]::ToDateTime($p.CreationTime) -ge $start.AddMinutes(-1)){ 'OK' } else { 'ERR|Windows не создала точку (проверьте, что служба «Теневое копирование тома» не отключена)' }
+}catch{ 'ERR|'+$_.Exception.Message }
+finally{
+  if($old -eq $null){ Remove-ItemProperty $k -Name SystemRestorePointCreationFrequency -ErrorAction SilentlyContinue }
+  else { Set-ItemProperty $k -Name SystemRestorePointCreationFrequency -Value $old -Type DWord }
+}`)
+	if strings.HasSuffix(out, "OK") {
+		restoreDone = true
+		logLine("OK", "Точка восстановления «KERNEL» создана")
+		return nil
+	}
+	msg := out
+	if i := strings.LastIndex(out, "ERR|"); i >= 0 {
+		msg = out[i+4:]
+	}
+	if msg == "" {
+		msg = "нет ответа от PowerShell"
+	}
+	logLine("ERR", "Точка восстановления НЕ создана: "+msg)
+	return fmt.Errorf("%s", msg)
+}
+
+// Приписка к итоговому сообщению, если точку создать не удалось
+func restoreNote(err error) string {
+	if err == nil {
+		return ""
+	}
+	return " Внимание: точку восстановления создать не удалось (" + err.Error() + "). Каждый пункт можно откатить кнопкой «Откатить всё»."
 }
 
 /* ============ Очистка ============ */
@@ -807,25 +869,6 @@ func findApp(id string) map[string]interface{} {
 		}
 	}
 	return nil
-}
-
-/* ============ Защита (только статус) ============ */
-func apiDefenderStatus() map[string]interface{} {
-	out := psLine("try{$s=Get-MpComputerStatus; \"$($s.RealTimeProtectionEnabled)|$($s.IsTamperProtected)\"}catch{'?|?'}")
-	parts := strings.Split(out, "|")
-	rt, tp := "", ""
-	if len(parts) == 2 {
-		rt, tp = parts[0], parts[1]
-	}
-	return map[string]interface{}{
-		"realtime": strings.EqualFold(strings.TrimSpace(rt), "True"),
-		"tamper":   strings.EqualFold(strings.TrimSpace(tp), "True"),
-	}
-}
-func apiOpenDefender() bool {
-	run("cmd", "/c", "start", "windowsdefender:")
-	logLine("INFO", "Открыто окно «Безопасность Windows»")
-	return true
 }
 
 /* ============ Драйверы ============ */

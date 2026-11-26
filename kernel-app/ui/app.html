@@ -230,18 +230,6 @@ body{
 .offline-dot.no{color:var(--dim2)}
 .offline-dot i{width:6px;height:6px;border-radius:50%;background:currentColor;display:block}
 
-/* Защита */
-.shield-status{display:flex;gap:16px;margin-bottom:20px}
-.shield-card{flex:1;background:var(--surface);border:1px solid var(--stroke);border-radius:18px;padding:22px;box-shadow:var(--shadow);display:flex;align-items:center;gap:16px}
-.shield-card .ring{width:52px;height:52px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0}
-.shield-card.on .ring{background:#13241A;border:1px solid #1E3A2A}
-.shield-card.off .ring{background:#241316;border:1px solid #3A1E22}
-.shield-card .ring svg{width:26px;height:26px}
-.shield-card.on .ring svg{color:var(--green)}
-.shield-card.off .ring svg{color:var(--red)}
-.shield-card .st{font-size:15px;font-weight:600}
-.shield-card .ds{font-size:12px;color:var(--dim);margin-top:3px}
-
 /* Драйверы */
 .drv-row{display:flex;align-items:center;gap:14px;padding:15px 20px;background:var(--surface);border:1px solid var(--stroke);border-radius:15px;margin-bottom:10px;box-shadow:var(--shadow)}
 .drv-row .di{width:38px;height:38px;border-radius:11px;background:var(--gold-soft);border:1px solid var(--gold-line);color:var(--gold2);display:flex;align-items:center;justify-content:center;flex-shrink:0}
@@ -331,7 +319,6 @@ body{
   .gauge{width:auto;flex-direction:row;gap:22px;justify-content:flex-start}
   .gauge .label{margin-top:0;text-align:left}
   .trio,.trio.duo{grid-template-columns:1fr}
-  .shield-status{flex-direction:column}
   .content{padding:24px 22px 32px}
   .update-bar,.reboot-bar{margin:14px 22px 0}
 }

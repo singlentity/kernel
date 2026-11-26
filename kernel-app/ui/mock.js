@@ -60,7 +60,6 @@ const MOCK = {
   freshApply:()=>({ok:true,msg:'Готово. Состояние сохранено.'}),
   setWallpaper:()=>({ok:true,msg:'Обои установлены.'}),
   pinInfo:()=>({blocked:true,msg:'Windows 11 хранит закреплённые приложения в закрытом файле start2.bin и не даёт менять их скриптом. Проще закрепить вручную: правый клик по приложению → «Закрепить на начальном экране».'}),
-  defenderStatus:()=>({realtime:true, tamper:true}),
   driverList:()=>[
     {name:'NVIDIA GeForce RTX 5070',cur:'32.0.16.2101',date:'2026-10-19',age:0,provider:'NVIDIA',cls:'display'},
     {name:'AMD SMBUS',cur:'2.0.0.29',date:'2025-08-07',age:14,provider:'Advanced Micro Devices, Inc',cls:'system'},
@@ -83,8 +82,8 @@ const MOCK = {
     {ts:'20:11:26',lv:'OK',msg:'Очищено 2.8 ГБ временных файлов'},
     {ts:'20:11:26',lv:'ERR',msg:'Нет доступа к C:\\Windows\\Temp\\locked.tmp — пропущено'},
   ],
-  applyAll:()=>true, applyTweaks:()=>true, revertAll:()=>true, clean:()=>true,
+  applyAll:()=>({ok:true,msg:'Система настроена. Все изменения постоянные и записаны в Журнал.'}), applyTweaks:()=>({ok:true,msg:'Настройки применены и сохранятся навсегда.'}), revertAll:()=>true, clean:()=>true,
   removeUwp:()=>({ok:true,msg:'Удалено приложений: 5'}), removeComp:()=>({ok:false,msg:'Microsoft Edge: штатный деинсталлятор отказался удалять'}), install:(id)=>({ok:true,msg:'Notepad++ установлен'}), downloadAll:()=>({ok:true,msg:'Все установщики (8) сохранены'}),
   edgeStatus:()=>({edge:true,store:false,webview:true}), openUrl:()=>true, launchApp:()=>({ok:true}),
-  openDefender:()=>true, updateDrivers:()=>true, backupDrivers:()=>true, toggleAutoClean:()=>true,
+  updateDrivers:()=>true, backupDrivers:()=>true, toggleAutoClean:()=>true,
 };
